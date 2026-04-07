@@ -137,6 +137,8 @@
 
   <script>
     let state = null;
+    let gamesStarted = 0;
+    let uiMode = null;
 
     const ACTIONS = [
       {
@@ -158,10 +160,34 @@
       {
         label: "划水摸鱼（精神+5，体力+5）",
         apply: (s) => {
-          s.mp = Math.min(100, s.mp + 5);
-          s.hp = Math.min(100, s.hp + 5);
+          const maxStat = maxStatFor(s);
+          s.mp = Math.min(maxStat, s.mp + 5);
+          s.hp = Math.min(maxStat, s.hp + 5);
           return ["精神+5", "体力+5"];
         }
+      }
+    ];
+
+    const BOONS = [
+      {
+        id: "high-energy",
+        name: "高精力人群",
+        desc: "体力+50，精力+50"
+      },
+      {
+        id: "medical-family",
+        name: "医学世家",
+        desc: "每月体力-1改为科研+1，最后一月必定出现读博选项"
+      },
+      {
+        id: "research-body",
+        name: "科研圣体",
+        desc: "科研行动不再扣除精神"
+      },
+      {
+        id: "clinical-body",
+        name: "临床圣体",
+        desc: "临床行动不再扣除体力"
       }
     ];
 
@@ -277,7 +303,58 @@
       return `${escaped.slice(0, splitAt + 1)}<br>${escaped.slice(splitAt + 1).trimStart()}`;
     }
 
+    function maxStatFor(s) {
+      return s && s.boon && s.boon.id === "high-energy" ? 150 : 100;
+    }
+
+    function getActionLabel(index) {
+      if (!state || !state.boon) return ACTIONS[index].label;
+      if (state.boon.id === "research-body" && index === 1) {
+        return "努力科研（科研能力+3，精神-0）";
+      }
+      if (state.boon.id === "clinical-body" && index === 0) {
+        return "精进临床（临床能力+3，体力-0）";
+      }
+      return ACTIONS[index].label;
+    }
+
+    function getWorkEffectText() {
+      if (state && state.boon && state.boon.id === "medical-family") {
+        return "本月你辛勤工作，临床能力+1，科研能力+1。工作之余，你决定：";
+      }
+      return "本月你辛勤工作，临床能力+1，体力-1。工作之余，你决定：";
+    }
+
+    function showLotteryPrompt() {
+      uiMode = "lottery";
+      setEventText(
+        `<strong>还要再来一次吗？或许你需要一些命运的馈赠。</strong><br>` +
+          `选择“接受”将随机获得一项天赋。`,
+        "normal",
+        true
+      );
+      el.startBtn.style.display = "none";
+      el.restartBtn.style.display = "none";
+      el.actionBtns[0].textContent = "接受";
+      el.actionBtns[1].textContent = "我命由我不由天";
+      el.actionBtns[0].style.display = "inline-block";
+      el.actionBtns[1].style.display = "inline-block";
+      el.actionBtns[2].style.display = "none";
+      el.actionBtns[0].disabled = false;
+      el.actionBtns[1].disabled = false;
+      el.actionBtns[2].disabled = true;
+    }
+
+    function startFlow() {
+      if (gamesStarted < 1) {
+        startGame(null);
+        return;
+      }
+      showLotteryPrompt();
+    }
+
     function initUI() {
+      uiMode = null;
       el.info.textContent = "";
       setEventText(
         `<strong>恭喜你成为一名专硕研究生，开始你的33个月规培生涯吧！</strong><br>` +
@@ -293,12 +370,17 @@
       el.restartBtn.style.display = "none";
     }
 
-    function startGame() {
+    function startGame(selectedBoon = null) {
+      const maxStat = selectedBoon && selectedBoon.id === "high-energy" ? 150 : 100;
       state = {
-        hp: 100,
-        mp: 100,
+        hp: maxStat,
+        mp: maxStat,
         cap: 0,
         research: 0,
+        boon: selectedBoon,
+        fishCount: 0,
+        careerPromptOffered: false,
+        careerPromptContext: null,
         month: 0,
         canChoose: true,
         pendingDecision: null,
@@ -315,6 +397,8 @@
         monthEvents: buildMonthEvents(33)
       };
 
+      gamesStarted += 1;
+      uiMode = null;
       el.startBtn.style.display = "none";
       nextMonth();
     }
@@ -330,17 +414,47 @@
       el.info.textContent = `第 ${state.month}/33 月 | 体力:${state.hp} 精神:${state.mp} 临床能力:${state.cap} 科研能力:${state.research}`;
     }
 
-    function showAction(prefixText = "", useHtml = false, type = "normal") {
+    function renderStandardAction(prefixText = "", useHtml = false, type = "normal") {
       state.canChoose = true;
       renderInfoOnly();
-      const baseText = "本月你辛勤工作，临床能力+1，体力-1。工作之余，你决定：";
+      const baseText = getWorkEffectText();
       const text = prefixText ? `${prefixText}${useHtml ? "<br><br>" : "\n\n"}${baseText}` : baseText;
       setEventText(text, type, useHtml);
       ACTIONS.forEach((action, i) => {
         const btn = el.actionBtns[i];
-        btn.textContent = action.label;
+        btn.textContent = getActionLabel(i);
       });
       toggleActionButtons(true);
+    }
+
+    function showAction(prefixText = "", useHtml = false, type = "normal") {
+      if (
+        state &&
+        state.fishCount > 10 &&
+        !state.careerPromptOffered &&
+        state.pendingDecision !== "career-switch"
+      ) {
+        state.pendingDecision = "career-switch";
+        state.careerPromptContext = { prefixText, useHtml, type };
+        state.canChoose = true;
+        renderInfoOnly();
+        const questionText = "你看着医院外的风景，渐渐产生了一个想法：或许我也能做其他的工作？";
+        const text = prefixText
+          ? `${prefixText}${useHtml ? "<br><br>" : "\n\n"}<strong>${questionText}</strong>`
+          : `<strong>${questionText}</strong>`;
+        setEventText(text, "normal", true);
+        el.actionBtns[0].textContent = "转行试试";
+        el.actionBtns[1].textContent = "继续坚持";
+        el.actionBtns[0].style.display = "inline-block";
+        el.actionBtns[1].style.display = "inline-block";
+        el.actionBtns[0].disabled = false;
+        el.actionBtns[1].disabled = false;
+        el.actionBtns[2].style.display = "none";
+        el.actionBtns[2].disabled = true;
+        return;
+      }
+
+      renderStandardAction(prefixText, useHtml, type);
     }
 
     function showPhdDecision(prefixHtml) {
@@ -373,7 +487,7 @@
       if (state.hp <= 0) {
         endGame(
           `<strong class="ending-title" style="color: var(--danger);">【结局】医者不自医</strong><br>` +
-          `你的床前有很多人，有你认识也有不认识的。每个人都希望你能醒过来。但现在你必须休息了。`,
+          `你的床前站着很多人，有你认识的也有不认识的。每个人都希望你能醒过来。可惜现在你必须休息了。`,
           "fail",
           true
         );
@@ -404,7 +518,7 @@
         true
       );
       el.actionBtns[0].textContent = "坚持";
-      el.actionBtns[1].textContent = "退学";
+      el.actionBtns[1].textContent = "退出";
       el.actionBtns[0].style.display = "inline-block";
       el.actionBtns[1].style.display = "inline-block";
       el.actionBtns[0].disabled = false;
@@ -419,14 +533,14 @@
 
       if (state.mp < 60 && !state.weaknessWarned.mp60) {
         state.weaknessQueue.push({
-          title: "精神衰弱：虽然疲惫，但你时常失眠。你觉得自己的情绪似乎阴晴不定，但又无从发泄。你需要放松。",
+          title: "精神衰弱：虽然疲惫，但你时常失眠。你觉得自己的情绪似乎阴晴不定，但又无从发泄。",
           detail: `当前精神=${state.mp}（低于60）`
         });
         state.weaknessWarned.mp60 = true;
       }
       if (state.mp < 30 && !state.weaknessWarned.mp30) {
         state.weaknessQueue.push({
-          title: "精神濒临崩溃：你觉得精疲力竭。你时常被莫名的负面情绪裹挟难以脱身，发现自己频繁忘记事情，总是工作出错，自己都觉得匪夷所思。",
+          title: "精神濒临崩溃：你觉得精疲力竭，时常被莫名的负面情绪裹挟难以脱身。你发现自己频繁忘记事情，总是工作出错。你需要放松。",
           detail: `当前精神=${state.mp}（低于30，已进入高危状态）`
         });
         state.weaknessWarned.mp30 = true;
@@ -434,14 +548,14 @@
 
       if (state.hp < 60 && !state.weaknessWarned.hp60) {
         state.weaknessQueue.push({
-          title: "体质衰弱：明明是个年轻人，但你最近小病不断。该休息了。",
+          title: "体质衰弱：明明是个年轻人，但你最近小病不断，吃着药也不见好。",
           detail: `当前体力=${state.hp}（低于60）`
         });
         state.weaknessWarned.hp60 = true;
       }
       if (state.hp < 30 && !state.weaknessWarned.hp30) {
         state.weaknessQueue.push({
-          title: "身体濒临极限：你已经带病上班有段时间了。你的身体一直不见好，工作久了总是头晕，夜班之后常常心悸。请立即休整",
+          title: "身体濒临极限：你已经带病上班有段时间了。你的身体状况每况愈下，工作久了总是头晕，夜班之后常常心悸。该休息了。",
           detail: `当前体力=${state.hp}（低于30，已进入高危状态）`
         });
         state.weaknessWarned.hp30 = true;
@@ -453,7 +567,19 @@
     }
 
     function chooseAction(index) {
-      if (!state || !state.canChoose || state.gameOver) return;
+      if (!state) {
+        if (uiMode === "lottery") {
+          if (index === 0) {
+            const boon = BOONS[Math.floor(Math.random() * BOONS.length)];
+            startGame(boon);
+          } else {
+            initUI();
+          }
+        }
+        return;
+      }
+
+      if (!state.canChoose || state.gameOver) return;
       state.canChoose = false;
 
       if (state.pendingDecision === "weakness") {
@@ -461,7 +587,7 @@
         if (index === 1) {
           endGame(
             `<strong class="ending-title" style="color: var(--text);">【结局】塞翁失马</strong><br>` +
-            `你选择暂时退学休整。眼前虽有遗憾，但你的人生还很长，选择还多，总会在某处迎来转机。`,
+            `你选择暂时退学休整。眼前虽有遗憾，但你的人生还很长，选择还很多，一切总会在某处迎来转机。`,
             "normal",
             true
           );
@@ -502,9 +628,45 @@
         return;
       }
 
-      const changes = ACTIONS[index].apply(state);
+      if (state.pendingDecision === "career-switch") {
+        toggleActionButtons(false);
+        if (index === 0) {
+          endGame(
+            `<strong class="ending-title" style="color: var(--text);">【隐藏结局】人生是旷野</strong><br>` +
+            `你决定找一份医疗系统之外的工作。虽然前路未知，但至少当下你重新找回了生活的掌控感。世界很大，而你相信人不论向哪里走都是向前。`,
+            "normal",
+            true
+          );
+          return;
+        }
+
+        state.pendingDecision = null;
+        state.careerPromptOffered = true;
+        const ctx = state.careerPromptContext || { prefixText: "", useHtml: false, type: "normal" };
+        state.careerPromptContext = null;
+        renderStandardAction(ctx.prefixText, ctx.useHtml, ctx.type);
+        return;
+      }
+
+      ACTIONS[index].apply(state);
+      if (index === 2) {
+        state.fishCount += 1;
+      }
+      if (state.boon && state.boon.id === "research-body" && index === 1) {
+        state.mp += 2;
+      }
+      if (state.boon && state.boon.id === "clinical-body" && index === 0) {
+        state.hp += 2;
+      }
       state.cap += 1;
-      state.hp -= 1;
+      if (state.boon && state.boon.id === "medical-family") {
+        state.research += 1;
+      } else {
+        state.hp -= 1;
+      }
+      const maxStat = maxStatFor(state);
+      state.hp = Math.min(maxStat, state.hp);
+      state.mp = Math.min(maxStat, state.mp);
 
       toggleActionButtons(false);
       nextMonth();
@@ -561,7 +723,7 @@
       if (state.month === 33) {
         if (state.cap >= 60) {
           const finalExamText = `<strong style="color: var(--text);">【特殊事件】规培结业考试通过 🎓🎉</strong>`;
-          if (state.research >= 60) {
+          if ((state.boon && state.boon.id === "medical-family") || state.research >= 60) {
             showPhdDecision(finalExamText);
           } else {
             endGame(
@@ -599,10 +761,14 @@
       if (!checkSurvival()) return;
 
       const randomLine = `【随机事件】${formatRandomEventText(monthEventText)}`;
-      state.pendingMonthContext = { randomLine };
+      const boonLine = state.month === 1 && state.boon
+        ? `<strong>【命运馈赠】${escapeHtml(state.boon.name)}</strong>：${escapeHtml(state.boon.desc)}`
+        : "";
+      const displayLine = boonLine ? `${boonLine}<br>${randomLine}` : randomLine;
+      state.pendingMonthContext = { randomLine: displayLine };
       if (!checkWeaknessPrompts()) return;
 
-      runMonthFlow(randomLine);
+      runMonthFlow(displayLine);
     }
 
     function resetGame() {
@@ -610,7 +776,7 @@
       initUI();
     }
 
-    el.startBtn.addEventListener("click", startGame);
+    el.startBtn.addEventListener("click", startFlow);
     el.restartBtn.addEventListener("click", resetGame);
     el.actionBtns.forEach((btn, i) => btn.addEventListener("click", () => chooseAction(i)));
 
