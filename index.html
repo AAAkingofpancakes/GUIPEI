@@ -138,6 +138,8 @@
   <script>
     let state = null;
     let gamesStarted = 0;
+    /** 二周目拒绝命运馈赠后，下一次「开始规培」应直接进入游戏，避免与抽奖界面死循环 */
+    let skipLotteryOnce = false;
     let uiMode = null;
 
     const ACTIONS = [
@@ -347,6 +349,11 @@
 
     function startFlow() {
       if (gamesStarted < 1) {
+        startGame(null);
+        return;
+      }
+      if (skipLotteryOnce) {
+        skipLotteryOnce = false;
         startGame(null);
         return;
       }
@@ -573,6 +580,7 @@
             const boon = BOONS[Math.floor(Math.random() * BOONS.length)];
             startGame(boon);
           } else {
+            skipLotteryOnce = true;
             initUI();
           }
         }
